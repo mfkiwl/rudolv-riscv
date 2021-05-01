@@ -10,9 +10,13 @@ Features
   * [Simulation with Icarus Verilog or Verilator](#simulation)
 
 Compatibility
-  * RV32IM Zcsr Zifence
+  * RV32IMC Zicsr Zifence
   * Privileged machine-level ISA 1.11
-  * [RISC-V compliance tests](#risc-v-compliance-tests)
+  * Formal verification with [riscv-formal](https://github.com/YosysHQ/riscv-formal)
+  * [Unit tests](#unit-tests)
+      - riscv-tests
+      - riscv-compliance (predecessor of riscv-arch-test)
+      - riscv-arch-test ([modified version that fits in 64 KiByte](https://github.com/bobbl/riscv-arch-test))
   * [Zephyr 2.2.0 support](#zephyr-support)
 
 Benchmarks
@@ -42,6 +46,7 @@ Structure of Repository
 | sw/tests/         | RISC-V tests                                        |
 | sw/uart/          | UART driver and bootloader                          |
 | sw/zephyr/        | Zephyr port                                         |
+| verify/           | Formal verification with riscv-formal               |
 | config.sh         | Configure paths to external tools                   |
 
 
@@ -55,11 +60,11 @@ Supported FPGAs
 | FPGA            | Cyclone IV | iCE40 UP5K    | IGLOO2 M2GL025  | Kinex-7   |
 | Board           | DE2-115    | UltraPlus MDP | Future Creative | Genesys-2 |
 | Tool            | Quartus    | IceStorm      | Libero          | Vivado    |
-| Logic Elements  | 2625       | 3434          | 3804            | 545       |
-| LUTs            | 2550       | 2661          | 3751            | 1728      |
-| DFFs            | 1089       | 1147          | 2190            | 1077      |
-| MHz             | 70         | 25            | 96              | 200       |
-| CoreMark        | 86         | 32            | 124             | 259       |
+| Logic Elements  | 3088       | 3795          | 4524            | 684       |
+| LUTs            | 2975       | 3162          | 4484            | 2136      |
+| DFFs            | 1202       | 1176          | 2346            | 1183      |
+| MHz             | 68         | 24            | 65              | 200       |
+| CoreMark        | 88         | 31            | 844             | 259       |
 
 Features:
   * 64 KiByte RAM (Microsemi only 56 KiByte)
@@ -119,18 +124,22 @@ as required by hard real-time systems.
 
 Data hazards are avoided by operand forwarding, therefore most instructions are
 executed in one cycle. Since the memory is single ported, memory accesses take
-two cycles. The jump target is computed in the execute stage, resulting in a two
-cycle latency. There is no dynamic branch prediction but subsequent instructions
+two cycles.
+
+The jump target is computed in the execute stage, resulting in a two cycle
+latency. There is no dynamic branch prediction but subsequent instructions
 are only killed in the case of a taken branch. This behaviour can be considered
-as a static always not taken prediction.
+as a static always not taken prediction. If the branch target is not aligned to
+a 32-bit boundary, a taken branch or unconditional jump needs an additional
+cycle.
 
 | instruction class  | examples                                       | cycles |
 | ------------------ | ---------------------------------------------- | ------ |
-| RV32M              | MUL, MULH, MULHSU, MULHU, DIV, DIVU, REM, REMU | 34     |
-| pipeline flush     | FENCE.I                                        | 3      |
-| exception          | ECALL, EBREAK                                  | 3      |
-| unconditional jump | JAL, JALR                                      | 3      |
-| taken branch       | BEQ, BNE, BLT, BGE, BLTU, BGEU                 | 3      |
+| RV32M              | MUL, MULH, MULHSU, MULHU, DIV, DIVU, REM, REMU | 35     |
+| pipeline flush     | FENCE.I                                        | 3/4    |
+| exception          | ECALL, EBREAK                                  | 3/4    |
+| unconditional jump | JAL, JALR                                      | 3/4    |
+| taken branch       | BEQ, BNE, BLT, BGE, BLTU, BGEU                 | 3/4    |
 | CSR access         | CSRRW, CSRRS, CSRRC                            | 2      |
 | memory access      | LB, LH, LW, LBU, LHU, SB, SH, SW               | 2      |
 | not taken branch   | BEQ, BNE, BLT, BGE, BLTU, BGEU                 | 1      |
@@ -187,10 +196,10 @@ provide a parity bit.
 
 | Manufacturer    | Intel      | Lattice       | Microsemi       | Xilinx    |
 | --------------- |:----------:|:-------------:|:---------------:|:---------:|
-| Logic Elements  |       2622 |          3434 |            3884 |       539 |
-| LUTs            |       2562 |          2661 |            3822 |      1734 |
-| DFFs            |       1096 |          1147 |            2195 |      1084 |
-| MHz             |         71 |            22 |              96 |       200 |
+| Logic Elements  |       3114 |          4010 |            4650 |       640 |
+| LUTs            |       2994 |          3351 |            4602 |      2083 |
+| DFFs            |       1210 |          1244 |            2379 |      1190 |
+| MHz             |         70 |            20 |              64 |       200 |
 
 If available on the board, a switch (DE2-115, Genesys-2) or a button (IGLOO2)
 can disable the grubby detection.
@@ -240,12 +249,17 @@ Extra CSRs can be added with the follwing interface:
     output        valid
 
 `addr` is valid one cycle earlier that the other signals. Thus, address decoding
-is separated from the actual read or write action.
+is separated from the actual read or write action. If `addr` holds an CSR
+address that is supported by the extension, the `valid` must be set
+asynchronously. The signal must be combinational to enable fast illegal CSR
+detection.
 
-In the following cycle, `read` is set if the CSR value should be read. If a valid
-register was selected by `addr` in the previous cycle, `valid` should be set to
-high and `rdata` to the value of the register. Both signals are only asserted for
-one cycle, otherwise both are cleared to 0.
+In the following cycle, `read` is set if the CSR value should be read. If a
+valid register was selected by `addr` in the previous cycle, `rdata` should be
+set to the value of the register. It is only asserted for one cycle, otherwise
+it is cleared to 0. Caution: `addr` is no longer valid in this cycle, therefore
+the extension is responsible for registered select signals from the previous
+cycle.
 
 `modify` defines, how the current CSR value should be combined with `wdata` to
 form the new value.
@@ -264,7 +278,7 @@ Examples of CSR extensions can be found in [src/csr.v](src/csr.v):
 
 | verilog module | no   | CSRs / description                                  |
 | -------------- | ---- | --------------------------------------------------- |
-| CsrIDs         | 0F1x | `vendorid`, `archid`, `impid`, `hartid`, clock rate |
+| CsrIDs         | 0F1x | `mvendorid`, `marchid`, `mimpid`, `mhartid`, `misa` |
 | CsrCounter     | 0C0x | `cycle`, `time`, `instret`                          |
 | CsrUartBitbang | 07C0 | Minimal UART interface for software bitbanging      |
 | CsrUartChar    | 0BC0 | Read and write bytes via UART                       |
@@ -291,20 +305,22 @@ with optional debug output and .vcd generation.
 
 
 
-RISC-V Compliance Tests
------------------------
+Unit Tests
+----------
 
-Meanwhile the [RISC-V compliance tests](https://github.com/riscv/riscv-compliance)
-include most of the older [riscv-tests](https://github.com/riscv/riscv-tests),
-but some tests for multiplication and division are missing. Therefore these
-missing tests and some RudolV-specific tests were added. They can be found
-under [sw/tests/src/](sw/tests/src/).
+The
+[RISC-V Compliance Tests](https://github.com/riscv/riscv-compliance/releases/tag/1.0)
+were renamed to RISC-V Architecture Tests and have undergone major revisons. 
+There are much more tests and they are auto-generated, but unfortunately the old
+compliance tests were removed and the integration of 
+[riscv-tests](https://github.com/riscv/riscv-tests) was canceled.
 
-Build the compliance tests:
+Therefore local copies of the old tests are maintained in this repository.
+To build the compliance tests run:
 
     make -C sw/compliance/
 
-Build the remaining riscv-tests and rudolv-tests:
+The riscv-tests are extended by some RudolV-specific tests and can be build by
 
     make -C sw/tests/
 
@@ -318,6 +334,25 @@ Simulate only a single test with debug output:
     cd scripts/sim
     ./make.sh icarus debug ../../sw/tests/build/rudolv_irq.elf
 
+There is another, more serious problem with the new
+[RISC-V Architecture Tests](https://github.com/riscv/riscv-arch-test):
+the binaries are extremely large and require up to 1.7 MiBytes of memory.
+And there are
+[no plans to reduce the memory footprint](https://github.com/riscv/riscv-arch-test/issues/157).
+
+A closer look at the source code reveals, that the reason for the memory demand
+is simple: When branches or jumps are tested, the memory between instruction
+and target is filled with nops. Only 3 jumps are responsible for the 1.7 MiByte
+binary. In addition, the branch tests can be optimised by overlapping branch
+instructions and targets. With these two modifications, all riscv-arch-tests fit
+into 64 KiBytes.
+
+The modified tests are in a
+[separate repository](https://github.com/bobbl/riscv-arch-test).
+To test RudolV with them use
+
+    cd sw/testsuites/
+    ./make.sh riscv-arch-test
 
 
 
@@ -414,7 +449,9 @@ Dependencies
 
 For simulation, either [Icarus Verilog](http://iverilog.icarus.com/) or
 [Verilator](https://www.veripool.org/wiki/verilator/) are required. Most Linux
-distributions offer packages for them.
+distributions offer packages for them. For example Ubuntu:
+
+    sudo apt install iverilog verilator
 
 Open source synthesis for Lattice FPGAs is possible with
 [Project Icestorm](http://www.clifford.at/icestorm/). Installation guidelines
@@ -423,11 +460,14 @@ vendor-specific toolchains (Libero, Quartus, Vivado). A guide to install
 Libero can be found 
 [here](https://bobbl.github.io/fpga/microsemi/2019/09/23/install-libero.html).
 
-To build the software, a RISC-V assembler and a C compiler for RV32IM is
-required. Install the GNU toolchain with
+To build the software, a RISC-V assembler and a C compiler with libgcc for
+RV32IM is required. Install the GNU toolchain to `$DESTDIR` with
 
     git clone --recursive https://github.com/riscv/riscv-gnu-toolchain
-    ./configure --prefix=/opt/riscv32im --with-arch=rv32im
+    cd riscv-gnu-toolchain
+    mkdir build
+    cd build
+    ../configure --prefix=$DESTDIR --with-arch=rv32im
     make
 
 By default, the build scripts of RudolV expect that the external toolchains

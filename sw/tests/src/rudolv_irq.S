@@ -1,5 +1,3 @@
-# See LICENSE for license details.
-
 #*****************************************************************************
 # rudolv_irq.S
 #-----------------------------------------------------------------------------
@@ -16,6 +14,8 @@
 #   CSR BC1h: set software interrupt pin (CsrPinsOut)
 #   CSR BC2h: timer interrupt controler (CsrTimerAdd)
 #
+# Copyright Jörg Mische <bobbl@gmx.de>
+# SPDX-License-Identifier: ISC
 
 
 #include "riscv_test.h"
@@ -131,9 +131,12 @@ test_14:
         li      x7, 0x90
         ENABLE_SOFTINT
         wfi
-        li      x4, 0x80000094          # cause: software interrupt
+        j       1f                      # jump after wfi can be problematic
+        nop
+        nop
+        j       restore_fail
+1:      li      x4, 0x80000094          # cause: software interrupt
         bne     x7, x4, restore_fail
-
 
 
 
@@ -203,6 +206,26 @@ test_24:
         bne     x7, x4, restore_fail
 
 
+        #-------------------------------------------------------------
+        # Test 25: SWI=1 then mret to set IE=1 => trap back-to-back to mret
+        #-------------------------------------------------------------
+test_25:
+        li      TESTNUM, 25
+        li      x7, 0x70
+        li      x4, 0x80
+        csrs    mstatus, x4             # MSTATUS.MPIE=1
+        la      x4, target_25
+        csrw    mepc, x4
+        mret                            # set IE to MPIE => trap
+        li      x7, 0x666
+        nop
+        nop
+        nop
+
+target_25:
+        li      x4, 0x80000074          # cause: software interrupt
+        bne     x7, x4, restore_fail
+
 
 
 
@@ -241,6 +264,23 @@ test_32:
         csrw    CSR_TIMER, x4
 
         wfi                             # does not work if wfi is just a nop
+
+        li      x4, 0x80000058          # cause: timer interrupt
+        bne     x7, x4, restore_fail
+
+
+        #-------------------------------------------------------------
+        # Test 33: IE=1 then timer int => trap (interrupt wfi in subroutine)
+        #-------------------------------------------------------------
+test_33:
+        li      TESTNUM, 33
+        li      x7, 0x50
+
+        ENABLE_INTS
+        li      x4, 50
+        csrw    CSR_TIMER, x4
+
+        jal     sub_wfi                 # does not work if wfi is just a nop
 
         li      x4, 0x80000058          # cause: timer interrupt
         bne     x7, x4, restore_fail
@@ -326,8 +366,6 @@ restore_fail:
 
 
 
-
-
 # Wait x6 cycles
 # If am interrupt occurs, x7 will be clobbered
 
@@ -340,6 +378,12 @@ loop:
         sub     x9, x9, x8
         blt     x9, x6, loop
         ret
+
+
+sub_wfi:
+        wfi
+        ret
+        j       restore_fail
 
 
 trap_disable_softint:

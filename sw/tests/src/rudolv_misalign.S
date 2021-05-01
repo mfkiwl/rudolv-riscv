@@ -6,6 +6,9 @@
 #   Test 1: load address misaligned exception 4
 #   Test 2: store/AMO address misaligned exception 6
 #   Test 3: instruction address misaligned exception 0
+#
+# Copyright Jörg Mische <bobbl@gmx.de>
+# SPDX-License-Identifier: ISC
 
 
 #include "riscv_test.h"
@@ -48,6 +51,11 @@ store_2:
         #-------------------------------------------------------------
         # Test 3: misaligned jump address
         #-------------------------------------------------------------
+#        csrr    x10, misa               # with compressed ISA misalignment
+#        and     x10, x10, 4             # is not possible
+#        bnez    x10, no_misalign
+j no_misalign
+
         li      TESTNUM, 3
         la      x10, jump_2             # expected MEPC
         li      x11, 0                  # expected MCAUSE
@@ -55,6 +63,8 @@ store_2:
 jump_2:
         jr      2(x9)
 
+
+no_misalign:
 
 
         TEST_PASSFAIL
